@@ -24,6 +24,8 @@
 
 -include("ejabberd.hrl").
 -include("jlib.hrl").
+-include("logger.hrl").
+
 
 -define(PROCNAME, ?MODULE).
 
@@ -58,22 +60,11 @@ stop(Host) ->
 	supervisor:delete_child(ejabberd_sup, Proc).
 
 %% called from start_link/2 and sets up the db connection
-init([_Host, Opts]) ->
+init([_Host, _]) ->
 	?INFO_MSG("Starting ~p", [?MODULE]),
 
 	crypto:start(),
 	application:start(emysql),
-
-	Server = gen_mod:get_opt(server, Opts, "localhost"),
-	Port = gen_mod:get_opt(port, Opts, 3306),
-	DB = gen_mod:get_opt(db, Opts, "logdb"),
-	User = gen_mod:get_opt(user, Opts, "root"),
-	Password = gen_mod:get_opt(password, Opts, ""),
-	PoolSize = gen_mod:get_opt(pool_size, Opts, 1),
-	Encoding = gen_mod:get_opt(encoding, Opts, utf8),
-
-	?INFO_MSG("Opening mysql connection ~s@~s:~p/~s", [User, Server, Port, DB]),
-	emysql:add_pool(mod_log_chat_mysql5_db, PoolSize, User, Password, Server, Port, DB, Encoding),
 	{ok, undefined}.
 
 %%--------------------------------------------------------------------
@@ -85,8 +76,6 @@ init([_Host, Opts]) ->
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
 	?INFO_MSG("Terminate called", []),
-	emysql:remove_pool(mod_log_chat_mysql5_db),
-	emysql:stop(),
 	ok.
 
 %%--------------------------------------------------------------------
@@ -113,12 +102,13 @@ handle_call(stop, _From, State) ->
 %%                                      {noreply, State, Timeout} |
 %%                                      {stop, Reason, State}
 %% Description: Handling cast messages
+%% odbc_queries:escape or ejabberd_odbc:escape
 %%--------------------------------------------------------------------
-handle_cast({insert_row, FromJid, ToJid, Body, Type}, State) ->
-	Query = ["INSERT INTO ", table_name(), " (fromJid, toJid, sentDate, body, type) VALUES",
-		"(?, ?, NOW(), ?, ?)"],
-
-	sql_query(Query, [FromJid, ToJid, Body, Type]),
+handle_cast({insert_row, From, FromJid, ToJid, Body, Type}, State) ->
+    ejabberd_odbc:sql_query(jlib:nameprep(From#jid.lserver),
+	    [<<"INSERT INTO ">>, table_name(), <<" (fromJid, toJid, sentDate, body, type) VALUES ('">>,
+		 ejabberd_odbc:escape(FromJid), <<"', '">>, ejabberd_odbc:escape(ToJid), <<"', NOW(), '">>,
+	         ejabberd_odbc:escape(Body), <<"', '">>, ejabberd_odbc:escape(Type), <<"');">>]),
 	{noreply, State}.
 
 %% handle module infos
@@ -161,7 +151,7 @@ write_packet(From, To, Packet, Type) ->
 					ToJid = To#jid.luser++"@"++To#jid.lserver
 			end,
 			Proc = gen_mod:get_module_proc(From#jid.server, ?PROCNAME),
-			gen_server:cast(Proc, {insert_row, FromJid, ToJid, Body, Type})
+			gen_server:cast(Proc, {insert_row, From, FromJid, ToJid, Body, Type})
 	end.
 
 %% ==================
@@ -178,15 +168,3 @@ escape(html, [$& | Text]) ->
 	"&amp;" ++ escape(html, Text);
 escape(html, [Char | Text]) ->
 	[Char | escape(html, Text)].
-
-sql_query(Query, Params) ->
-	case sql_query_internal_silent(Query, Params) of
-		{error, Reason} ->
-			?INFO_MSG("~p while ~p", [Reason, lists:append(Query)]),
-			{error, Reason};
-		Rez -> Rez
-	end.
-
-sql_query_internal_silent(Query, Params) ->
-	emysql:prepare(mod_log_chat_mysql5_stmt, Query),
-	emysql:execute(mod_log_chat_mysql5_db, mod_log_chat_mysql5_stmt, Params).
