@@ -125,7 +125,7 @@ log_packet(From, To, Packet = {xmlel, <<"message">>, Attrs, _Els}) ->
 			?DEBUG("dropping error: ~s", [xml:element_to_string(Packet)]),
 			ok;
 		_ ->
-			write_packet(From, To, Packet, xml:get_attr_s("type", Attrs))
+			write_packet(From, To, Packet, xml:get_attr_s(<<"type">>, Attrs))
 	end;
 log_packet(_From, _To, _Packet) ->
 	ok.
