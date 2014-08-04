@@ -20,7 +20,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 		terminate/2, code_change/3]).
 
-%%-define(ejabberd_debug, true).
+%% -define(ejabberd_debug, true).
 
 -include("ejabberd.hrl").
 -include("jlib.hrl").
@@ -62,9 +62,6 @@ stop(Host) ->
 %% called from start_link/2 and sets up the db connection
 init([_Host, _]) ->
 	?INFO_MSG("Starting ~p", [?MODULE]),
-
-	crypto:start(),
-	application:start(emysql),
 	{ok, undefined}.
 
 %%--------------------------------------------------------------------
@@ -122,7 +119,7 @@ handle_info(Info, State) ->
 log_packet_send(From, To, Packet) ->
 	log_packet(From, To, Packet).
 
-log_packet(From, To, Packet = {xmlelement, "message", Attrs, _Els}) ->
+log_packet(From, To, Packet = {xmlel, <<"message">>, Attrs, _Els}) ->
 	case xml:get_attr_s("type", Attrs) of
 		"error" -> %% we don't log errors
 			?DEBUG("dropping error: ~s", [xml:element_to_string(Packet)]),
@@ -135,20 +132,20 @@ log_packet(_From, _To, _Packet) ->
 
 %% parse message and send to db connection gen_server
 write_packet(From, To, Packet, Type) ->
-	Body = escape(html, xml:get_path_s(Packet, [{elem, "body"}, cdata])),
+	Body = list_to_binary(escape(html, binary_to_list(xml:get_path_s(Packet, [{elem, <<"body">>}, cdata])))),
 	case Body of
 		"" -> %% don't log empty messages
 			?DEBUG("not logging empty message from ~s",[jlib:jid_to_string(From)]),
 			ok;
 		_ ->
-			FromJid = From#jid.luser++"@"++From#jid.lserver++"/"++From#jid.resource,
-			ResourceLen = length(To#jid.resource),
+			FromJid = erlang:iolist_to_binary([From#jid.luser, <<"@">>, From#jid.lserver, <<"/">>, From#jid.resource]),
+			ResourceLen = length(binary_to_list(To#jid.resource)),
 			%% don't include resource when target is muc room
 			if
 				ResourceLen > 0 ->
-					ToJid = To#jid.luser++"@"++To#jid.lserver++"/"++To#jid.resource;
+					ToJid = erlang:iolist_to_binary([To#jid.luser, <<"@">>, To#jid.lserver, <<"/">>, To#jid.resource]);
 				true ->
-					ToJid = To#jid.luser++"@"++To#jid.lserver
+					ToJid = erlang:iolist_to_binary([To#jid.luser, <<"@">>, To#jid.lserver])
 			end,
 			Proc = gen_mod:get_module_proc(From#jid.server, ?PROCNAME),
 			gen_server:cast(Proc, {insert_row, From, FromJid, ToJid, Body, Type})
